@@ -80,6 +80,13 @@ typedef u32 u32x;
 typedef i32 i32x;
 typedef u32 uint;
 
+// TODO: Maybe 64 bit?
+typedef u32 usize;
+
+namespace Usize {
+    constexpr usize Max = 0xffffffff;
+}
+
 namespace Uptr {
     constexpr uptr Max = UINTPTR_MAX;
 }

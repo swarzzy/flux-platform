@@ -734,7 +734,8 @@ m4x4 Inverse(m4x4 m) {
     f32 det = m._11 * A11 + m._12 * A12 + m._13 * A13 + m._14 * A14;
 
     if (det == 0) {
-        assert(false);
+        // TODO: Do something reasonabe if the matrix is not invertable
+        //assert(false);
         return M4x4(0.0f);
     } else {
         m4x4 result;
