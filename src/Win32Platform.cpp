@@ -515,7 +515,7 @@ void ProcessMButtonDownAndDblclkEventImGui(Win32Context* application, ImGuiIO* i
     if (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONDBLCLK) { button = 2; }
     if (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONDBLCLK) { button = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? 3 : 4; }
     if (!ImGui::IsAnyMouseDown() && GetCapture() == NULL) {
-        SetCapture(application->windowHandle);
+        //SetCapture(application->windowHandle);
     }
     io->MouseDown[button] = true;
 }
@@ -529,7 +529,7 @@ void ProcessMButtonUpEventImGui(Win32Context* application, ImGuiIO* io, UINT msg
     if (msg == WM_XBUTTONUP) { button = (GET_XBUTTON_WPARAM(wParam) == XBUTTON1) ? 3 : 4; }
     io->MouseDown[button] = false;
     if (!ImGui::IsAnyMouseDown() && ::GetCapture() == application->windowHandle) {
-        ::ReleaseCapture();
+        //::ReleaseCapture();
     }
 }
 
@@ -618,9 +618,19 @@ LRESULT CALLBACK Win32WindowProc(HWND windowHandle, UINT message, WPARAM wParam,
         app->state.windowHeight = HIWORD(lParam);
     } break;
 
+    // NOTE: Passing WM_DESTROY to a default handler. If we handke it manually here
+    // then there is weird behavior appears with Default open file dialog window.
+    // I don't know what is the reason of this weirdness. Probably dialog window
+    // interacts with main window message loop somehow and WM_DESTROY gets processed incorrectly
+    // so just passing this message to default handler. By the way, default handler call PostQuitMessgae
+    // too so there is no reason to handle it manually for now.
+    // And then after a few hours I uncommented WM_DESTROY AND SUDDENLY EVERYTHING WORKS. What is going on Windows?
+    // Am I doing something wrong or it's just another windows bug?
+#if 1
     case WM_DESTROY: {
         PostQuitMessage(0);
     } break;
+#endif
 
     case WM_CLOSE: {
         GlobalRunning = false;
@@ -862,6 +872,9 @@ void Win32Init(Win32Context* ctx) {
 
     HDC actualWindowDC = GetDC(actualWindowHandle);
 
+    char openFileName[1024];
+    openFileName[0] = 0;
+
     // NOTE: ^^^^ ACTUAL WINDOW
 
     int attribList[] = {
@@ -961,7 +974,10 @@ void GetExecutablePath(TCHAR* buffer, u32 bufferSizeBytes, u32* bytesWritten) {
 __declspec(restrict)
 #endif
 void* Allocate(uptr size, uptr alignment, void* data) {
-    auto memory = malloc(size);
+    if (alignment == 0) {
+        alignment = 16;
+    }
+    auto memory = _aligned_malloc(size, alignment);
     assert(memory);
     //log_print("[Platform] Allocate %llu bytes at address %llu\n", size, (u64)memory);
     return memory;
@@ -969,7 +985,7 @@ void* Allocate(uptr size, uptr alignment, void* data) {
 
 void Deallocate(void* ptr, void* data) {
     //log_print("[Platform] Deallocating memory at address %llu\n", (u64)ptr);
-    free(ptr);
+    _aligned_free(ptr);
 }
 
 #if defined(COMPILER_MSVC)
@@ -1102,6 +1118,124 @@ void Win32FreeArena(MemoryArena* arena) {
     assert(result);
 }
 
+// nocheckin
+// TODO: Move to String.h
+struct SplitFilePathResult {
+    wchar_t* directory;
+    wchar_t* filename;
+};
+
+SplitFilePathResult SplitFilePath(wchar_t* path) {
+    SplitFilePathResult result {};
+    auto pathLength = (uptr)wcslen(path);
+    uptr splitPos = 0;
+    for (uptr i = pathLength - 1; i > 0; i--) {
+        if (path[i] == '/' || path[i] == '\\') {
+            splitPos = i;
+            break;
+        }
+    }
+    if (splitPos == pathLength - 1) {
+        result.directory = path;
+    } else if (splitPos > 0) {
+        path[splitPos] = 0;
+        result.directory = path;
+        result.filename = path + (splitPos + 1);
+    } else {
+        result.filename = path + 1;
+    }
+    return result;
+}
+
+
+// TODO: Better memory arenas API (temp frames and stuff)
+OpenFileDialogResult Win32ShowOpenFileDialog(MemoryArena* tempArena, b32 multiselect) {
+    OpenFileDialogResult result {};
+    // Picking totally random size
+    const uptr BufferSize = 8192;
+    auto buffer = (wchar_t*)PushSize(tempArena, sizeof(wchar_t) * BufferSize);
+    if (buffer) {
+        buffer[0] = 0;
+        OPENFILENAMEW ofn {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = GlobalContext.windowHandle;
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = BufferSize;
+        ofn.lpstrFilter = L"All Files\0*.*\0\0"; // TODO: Filters
+        ofn.nFilterIndex = 1;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | multiselect ? (OFN_ALLOWMULTISELECT | OFN_EXPLORER) : 0;
+
+        if (GetOpenFileNameW(&ofn) == TRUE) {
+            u32 fileCount = 0;
+            assert(buffer[0]);
+            result.ok = true;
+            if (!multiselect) {
+                auto split = SplitFilePath(buffer);
+                result.fileCount = 1;
+                result.directory = split.directory;
+                result.files = (wchar_t**)PushSize(tempArena, sizeof(wchar_t*));
+                if (result.files) {
+                    result.files[0] = split.filename;
+                } else {
+                    result = {};
+                }
+            } else {
+                result.directory = buffer;
+                uptr directorySize = wcslen(buffer);
+                auto files = buffer + (directorySize + 1);
+                uptr fileCount = 0;
+                // NOTE: Assuming there if \0\0 at end
+                auto at = files;
+                uptr i = 0;
+                while (true) {
+                    fileCount++;
+                    while (at[i] != '\0') {
+                        i++;
+                    }
+                    assert((i + 1) < (BufferSize - 1));
+                    if (at[i + 1] == 0) {
+                        break;
+                    } else {
+                        i++;
+                    }
+                }
+
+                result.fileCount = (u32)fileCount;
+                result.files = (wchar_t**)PushSize(tempArena, sizeof(wchar_t*) * fileCount);
+                if (result.files) {
+                    if (fileCount == 1) {
+                        auto split = SplitFilePath(buffer);
+                        result.fileCount = 1;
+                        result.directory = split.directory;
+                        result.files[0] = split.filename;
+                    } else {
+                        auto at = files;
+                        uptr i = 0;
+                        uptr fileIndex = 0;
+                        while (true) {
+                            assert(fileIndex < fileCount);
+                            result.files[fileIndex] = at + i;
+                            fileIndex++;
+                            while (at[i] != '\0') {
+                                i++;
+                            }
+                            assert((i + 1) < (BufferSize - 1));
+                            if (at[i + 1] == 0) {
+                                break;
+                            } else {
+                                i++;
+                            }
+                        }
+                    }
+                } else {
+                    result = {};
+                }
+            }
+        }
+    }
+    return result;
+}
+
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, int showCmd)
 {
 #if defined(ENABLE_CONSOLE)
@@ -1176,6 +1310,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, in
     app->state.functions.GetTimeStamp = GetTimeStamp;
 
     app->state.functions.EnumerateFilesInDirectory = EnumerateFilesInDirectory;
+    app->state.functions.ShowOpenFileDialog = Win32ShowOpenFileDialog;
 
     app->state.lowPriorityQueue = lowQueue;
     app->state.highPriorityQueue = highQueue;
@@ -1184,7 +1319,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, in
 
     b32 codeLoaded = UpdateGameCode(&app->gameLib);
     if (!codeLoaded) {
-        log_print("[win32] Failed to load game code\n");
+        //log_print("[win32] Failed to load game code\n");
     }
 
     IMGUI_CHECKVERSION();
@@ -1238,7 +1373,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, in
         if (codeReloaded) {
             app->gameLib.GameUpdateAndRender(&app->state, GameInvoke::Reload, &GlobalGameData);
         } else {
-            log_print("[win32] Failed to load game code\n");
+            //log_print("[win32] Failed to load game code\n");
         }
 
         updatesSinceLastTick++;

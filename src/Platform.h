@@ -85,6 +85,15 @@ typedef void(CompleteAllWorkFn)(WorkQueue* queue);
 
 typedef void(SleepFn)(u32 ms);
 
+struct OpenFileDialogResult {
+    b32 ok;
+    u32 fileCount;
+    wchar_t* directory;
+    wchar_t** files;
+};
+
+typedef OpenFileDialogResult(ShowOpenFileDialogFn)(MemoryArena* tempArena, b32 multiselect);
+
 struct Mesh {
     char name[32];
     void* base;
@@ -172,6 +181,7 @@ struct PlatformCalls
     ResourceLoaderValidateImageFileFn* ResourceLoaderValidateImageFile;
 
     EnumerateFilesInDirectoryFn* EnumerateFilesInDirectory;
+    ShowOpenFileDialogFn* ShowOpenFileDialog;
 };
 
 struct KeyState
