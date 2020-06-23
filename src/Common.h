@@ -112,6 +112,20 @@ namespace U32 {
 typedef void*(AllocateFn)(uptr size, uptr alignment, void* allocatorData);
 typedef void(DeallocateFn)(void* ptr, void* allocatorData);
 
+struct Allocator {
+    AllocateFn* Alloc;
+    DeallocateFn* Dealloc;
+    void* data;
+};
+
+inline Allocator MakeAllocator(AllocateFn* alloc, DeallocateFn* dealloc, void* data) {
+    Allocator allocator {};
+    allocator.Alloc = alloc;
+    allocator.Dealloc = dealloc;
+    allocator.data = data;
+    return allocator;
+}
+
 // NOTE: Logger API
 typedef void(LoggerFn)(void* loggerData, const char* fmt, va_list* args);
 typedef void(AssertHandlerFn)(void* userData, const char* file, const char* func, u32 line, const char* exprString, const char* fmt, va_list* args);

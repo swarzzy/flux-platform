@@ -279,4 +279,5 @@ struct PlatformState
     u32 windowHeight;
     DateTime localTime;
     GLDebugCallbackFn* glDebugCallback;
+    wchar_t* executablePath;
 };

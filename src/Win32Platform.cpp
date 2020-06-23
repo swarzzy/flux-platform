@@ -9,6 +9,7 @@
 
 #include "Win32Platform.h"
 #include "Memory.h"
+#include "Path.h"
 
 #include <intrin.h>
 #include <timeapi.h>
@@ -176,6 +177,8 @@ u32 DebugGetFileSize(const wchar_t* filename) {
             fileSize = (u32)sz;
         }
         CloseHandle(handle);
+    } else {
+        log_print("File open error %llu\n", (unsigned long)GetLastError());
     }
     return fileSize;
 }
@@ -1118,36 +1121,6 @@ void Win32FreeArena(MemoryArena* arena) {
     assert(result);
 }
 
-// nocheckin
-// TODO: Move to String.h
-struct SplitFilePathResult {
-    wchar_t* directory;
-    wchar_t* filename;
-};
-
-SplitFilePathResult SplitFilePath(wchar_t* path) {
-    SplitFilePathResult result {};
-    auto pathLength = (uptr)wcslen(path);
-    uptr splitPos = 0;
-    for (uptr i = pathLength - 1; i > 0; i--) {
-        if (path[i] == '/' || path[i] == '\\') {
-            splitPos = i;
-            break;
-        }
-    }
-    if (splitPos == pathLength - 1) {
-        result.directory = path;
-    } else if (splitPos > 0) {
-        path[splitPos] = 0;
-        result.directory = path;
-        result.filename = path + (splitPos + 1);
-    } else {
-        result.filename = path + 1;
-    }
-    return result;
-}
-
-
 // TODO: Better memory arenas API (temp frames and stuff)
 OpenFileDialogResult Win32ShowOpenFileDialog(MemoryArena* tempArena, b32 multiselect) {
     OpenFileDialogResult result {};
@@ -1232,6 +1205,10 @@ OpenFileDialogResult Win32ShowOpenFileDialog(MemoryArena* tempArena, b32 multise
                 }
             }
         }
+        // NOTE: GetOpenFileNameW changes working directory so set it back
+        auto directoryResetResult = SetCurrentDirectoryW(GlobalContext.state.executablePath);
+        // TODO: Ensure directory is always reset
+        assert(directoryResetResult);
     }
     return result;
 }
@@ -1255,6 +1232,18 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, in
     app->state.windowHeight = 720;
 
     Win32Init(app);
+
+    // TODO: BUFFER TO SMALL
+    wchar_t* executablePath = (wchar_t*)Allocate(sizeof(wchar_t) * 2048, 0, nullptr);
+    auto getExePathResult = GetModuleFileName(0, executablePath, 2048);
+    auto splitResult = SplitFilePath(executablePath);
+    // This looks hacky but it is correct
+    splitResult.filename[-1] = '\\';
+    splitResult.filename[0] = 0;
+    assert(getExePathResult);
+
+    NormalizePath(executablePath);
+    app->state.executablePath = executablePath;
 
     app->wglSwapIntervalEXT(1);
 
